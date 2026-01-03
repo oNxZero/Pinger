@@ -12,14 +12,6 @@ It’s built for quick diagnostics when you need to watch connection stability w
 
 ---
 
-## 📸 Demo
-
-<p align="center">
-  <img src="./assets/demo.gif" alt="Demo">
-</p>
-
----
-
 ## 🎯 What it does
 
 * **Structured Display:** Replaces the standard ping output with an aligned data table.
