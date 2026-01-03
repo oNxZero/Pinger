@@ -43,7 +43,7 @@ It’s built for quick diagnostics when you need to watch connection stability w
 Pinger requires **Python 3.9+** (for async features).
 
     # Clone the repository
-    git clone https://github.com/oNxZero/Pinger.git
+    git clone https://github.com/oNxZero/pinger.git
 
     # Enter the directory
     cd pinger
