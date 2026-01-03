@@ -6,13 +6,18 @@ import socket
 import sys
 import re
 import argparse
+import shutil
 from ping3 import ping
 from statistics import mean
 from colorama import init, Fore, Style
 
 init(autoreset=True)
 
-os.system("clear")
+def clear_screen():
+    if os.name == "nt":
+        os.system("cls")
+    else:
+        os.system("clear")
 
 HELP_TEXT = """Usage:
   pinger HOST [-c COUNT] [-i INTERVAL_MS] [-t TIMEOUT_MS]
@@ -20,35 +25,46 @@ HELP_TEXT = """Usage:
 
 Flags:
   HOST                  IP address or hostname to ping
-  -c,  --count COUNT    Number of pings to send (default: 10)
+  -c,  --count COUNT    Number of pings to send (default: 8)
   -i,  --interval MS    Delay between pings in milliseconds (default: 500)
   -t,  --timeout  MS    Timeout per ping in milliseconds (default: 1000)
   -h,  --help           Show this help and exit
-
-Examples:
-  pinger google.com
-  pinger 1.1.1.1 -c 5 -i 200 -t 1000
 """
 
-def parse_args():
-    p = argparse.ArgumentParser(
-        prog="pinger",
-        add_help=False,
-        formatter_class=argparse.RawTextHelpFormatter,
-        description=HELP_TEXT,
-    )
+def get_term_size():
+    return shutil.get_terminal_size((80, 24))
 
-    p.add_argument("host", nargs="?", help=argparse.SUPPRESS)
-    p.add_argument("-c", "--count", type=int, default=10, help=argparse.SUPPRESS)
-    p.add_argument("-i", "--interval", type=int, default=500, metavar="MS", help=argparse.SUPPRESS)
-    p.add_argument("-t", "--timeout", type=int, default=1000, metavar="MS", help=argparse.SUPPRESS)
-    p.add_argument("-h", "--help", action="store_true", help=argparse.SUPPRESS)
-
-    return p.parse_args()
-
-def strip_ansi(string):
+def strip_ansi(text):
     ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
-    return ansi_escape.sub('', string)
+    return ansi_escape.sub('', text)
+
+def print_centered(text, width=None):
+    if width is None:
+        width = get_term_size().columns
+    clean = strip_ansi(text)
+    padding = max(0, (width - len(clean)) // 2)
+    print(" " * padding + text)
+
+def input_centered(prompt, width=None):
+    if width is None:
+        width = get_term_size().columns
+    clean = strip_ansi(prompt)
+    padding = max(0, (width - len(clean)) // 2)
+    return input(" " * padding + prompt)
+
+def calc_vertical_margin(content_lines):
+    h = get_term_size().lines
+    margin = max(0, (h - content_lines) // 2)
+    return margin
+
+def parse_args():
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("host", nargs="?")
+    p.add_argument("-c", "--count", type=int, default=8)
+    p.add_argument("-i", "--interval", type=int, default=500)
+    p.add_argument("-t", "--timeout", type=int, default=1000)
+    p.add_argument("-h", "--help", action="store_true")
+    return p.parse_args()
 
 class PingStats:
     def __init__(self):
@@ -75,85 +91,97 @@ class PingStats:
         return max(self.latencies) if self.latencies else 0
 
 def is_valid_ip(host):
-    ip_pattern = r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
-    if re.match(ip_pattern, host):
-        parts = host.split(".")
-        return all(0 <= int(part) <= 255 for part in parts)
+    if not host: return False
+    if re.match(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$", host):
+        return True
     try:
         if len(host) > 1 and "." in host:
-            socket.gethostbyname(host)
             return True
-        else:
-            return False
-    except socket.error:
-        return False
+    except:
+        pass
+    return True
 
 COL_WIDTHS = {
-    'try': 6,
-    'ip': 17,
+    'try': 8,
+    'ip': 25,
     'protocol': 10,
-    'latency': 12,
-    'bytes': 8,
-    'status': 10
+    'latency': 14,
+    'bytes': 10,
+    'status': 12
 }
 
-async def ping_target(host, count=10, interval=0.5, timeout=1.0):
+async def ping_target(host, count=8, interval=0.5, timeout=1.0):
+    clear_screen()
     stats = PingStats()
 
-    header = (
-        f"{Fore.WHITE}"
-        f"{'             TRY'.center(COL_WIDTHS['try'])}"
-        f"{'     TARGET'.center(COL_WIDTHS['ip'])}"
-        f"{'   PROTOCOL'.center(COL_WIDTHS['protocol'])}"
-        f"{' LATENCY'.center(COL_WIDTHS['latency'])}"
-        f"{'  BYTES'.center(COL_WIDTHS['bytes'])}"
-        f"{'  STATUS'.center(COL_WIDTHS['status'])}"
-        f"{Style.RESET_ALL}"
-    )
+    total_content_height = 3 + count + 5
+    top_margin = calc_vertical_margin(total_content_height)
 
-    print(f"\n{header}")
+    print("\n" * top_margin)
+
+    header_raw = (
+        f"{'TRY'.center(COL_WIDTHS['try'])}"
+        f"{'TARGET'.center(COL_WIDTHS['ip'])}"
+        f"{'PROTOCOL'.center(COL_WIDTHS['protocol'])}"
+        f"{'LATENCY'.center(COL_WIDTHS['latency'])}"
+        f"{'BYTES'.center(COL_WIDTHS['bytes'])}"
+        f"{'STATUS'.center(COL_WIDTHS['status'])}"
+    )
+    print_centered(f"{Fore.WHITE}{header_raw}{Style.RESET_ALL}")
+    print_centered(f"{Fore.WHITE}{'─' * len(header_raw)}{Style.RESET_ALL}")
 
     for i in range(count):
         latency = await asyncio.to_thread(ping, host, timeout=timeout)
         stats.add(latency)
 
-        protocol = "ICMP"
-        bytes_sent = "64"
-
         if latency is None:
-            status = f"{Fore.RED}   Down{Style.RESET_ALL}"
-            latency_display = "-"
-            bytes_sent = "-"
+            status_txt = "Down"
+            status_col = f"{Fore.RED}{status_txt.center(COL_WIDTHS['status'])}{Style.RESET_ALL}"
+            lat_disp = "-"
+            bytes_disp = "-"
         else:
-            status = f"{Fore.WHITE}    UP{Style.RESET_ALL}"
-            latency_display = f"{latency*1000:.2f} ms"
+            status_txt = "UP"
+            status_col = f"{Fore.WHITE}{status_txt.center(COL_WIDTHS['status'])}{Style.RESET_ALL}"
+            lat_disp = f"{latency*1000:.2f} ms"
+            bytes_disp = "64"
 
-        row = (
+        row_raw = (
             f"{('#' + str(i+1)).center(COL_WIDTHS['try'])}"
             f"{host.center(COL_WIDTHS['ip'])}"
-            f"{protocol.center(COL_WIDTHS['protocol'])}"
-            f"{latency_display.center(COL_WIDTHS['latency'])}"
-            f"{bytes_sent.center(COL_WIDTHS['bytes'])}"
-            f"{status.center(COL_WIDTHS['status'])}"
+            f"{'ICMP'.center(COL_WIDTHS['protocol'])}"
+            f"{lat_disp.center(COL_WIDTHS['latency'])}"
+            f"{bytes_disp.center(COL_WIDTHS['bytes'])}"
         )
-        print(f"            {row}")
+
+        full_vis = row_raw + status_txt.center(COL_WIDTHS['status'])
+        w = get_term_size().columns
+        pad = max(0, (w - len(full_vis)) // 2)
+
+        print(" " * pad + row_raw + status_col)
 
         await asyncio.sleep(interval)
 
-    print(f" ")
+    sep = '═' * 80
+    print_centered(f"{Fore.WHITE}{sep}{Style.RESET_ALL}")
 
-    print(f"{Fore.WHITE}            {'═'*23} Ping Summary {'═'*24}{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}            Packets  : {Fore.WHITE}Sent = {Fore.YELLOW}{stats.sent}{Style.RESET_ALL}, "
-        f"Received = {Fore.GREEN}{stats.received}{Style.RESET_ALL}, "
-        f"Lost = {Fore.RED}{stats.sent - stats.received}{Style.RESET_ALL} "
-        f"({Fore.RED}{stats.packet_loss():.1f}%{Style.RESET_ALL} loss)")
-    print(f"{Fore.GREEN}            Latency  : {Fore.WHITE}Avg = {Fore.YELLOW}{stats.avg_latency():.2f} ms{Style.RESET_ALL}, "
-        f"Min = {Fore.GREEN}{stats.min_latency():.2f} ms{Style.RESET_ALL}, "
-        f"Max = {Fore.RED}{stats.max_latency():.2f} ms{Style.RESET_ALL}")
-    print(f"{Fore.WHITE}            {'═'*61}{Style.RESET_ALL}")
+    s_line1 = (
+        f"Packets: {Fore.WHITE}Sent={Fore.YELLOW}{stats.sent}{Style.RESET_ALL}, "
+        f"Received={Fore.GREEN}{stats.received}{Style.RESET_ALL}, "
+        f"Lost={Fore.RED}{stats.sent - stats.received}{Style.RESET_ALL} "
+        f"({Fore.RED}{stats.packet_loss():.1f}%{Style.RESET_ALL})"
+    )
+    print_centered(s_line1)
+
+    s_line2 = (
+        f"Latency: {Fore.WHITE}Avg={Fore.YELLOW}{stats.avg_latency():.2f}ms{Style.RESET_ALL}, "
+        f"Min={Fore.GREEN}{stats.min_latency():.2f}ms{Style.RESET_ALL}, "
+        f"Max={Fore.RED}{stats.max_latency():.2f}ms{Style.RESET_ALL}"
+    )
+    print_centered(s_line2)
+    print_centered(f"{Fore.WHITE}{sep}{Style.RESET_ALL}")
 
 async def main():
-    os.system("clear")
+    clear_screen()
     args = parse_args()
 
     if args.help:
@@ -161,80 +189,60 @@ async def main():
         sys.exit(0)
 
     if args.host:
-        host = args.host
-        if not is_valid_ip(host):
-            print(f"{Fore.RED}❌ Invalid host or IP provided!{Style.RESET_ALL}")
-            sys.exit(1)
-
-        if args.count <= 0 or args.interval <= 0 or args.timeout <= 0:
-            print(f"{Fore.RED}❌ All numeric values must be positive!{Style.RESET_ALL}")
-            sys.exit(1)
-
         interval_s = args.interval / 1000.0
         timeout_s  = args.timeout  / 1000.0
-
-        await ping_target(host, count=args.count, interval=interval_s, timeout=timeout_s)
+        await ping_target(args.host, args.count, interval_s, timeout_s)
         return
 
-    print(f"{Fore.RED}{Style.RESET_ALL}")
-    print(f"{Fore.WHITE}                    ██████╗ ██╗███╗   ██╗ ██████╗ ███████╗██████╗ {Style.RESET_ALL}")
-    print(f"{Fore.WHITE}                    ██╔══██╗██║████╗  ██║██╔════╝ ██╔════╝██╔══██╗{Style.RESET_ALL}")
-    print(f"{Fore.WHITE}                    ██████╔╝██║██╔██╗ ██║██║  ███╗█████╗  ██████╔╝{Style.RESET_ALL}")
-    print(f"{Fore.WHITE}                    ██╔═══╝ ██║██║╚██╗██║██║   ██║██╔══╝  ██╔══██╗{Style.RESET_ALL}")
-    print(f"{Fore.WHITE}                    ██║     ██║██║ ╚████║╚██████╔╝███████╗██║  ██║{Style.RESET_ALL}")
-    print(f"{Fore.WHITE}                    ╚═╝     ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝{Style.RESET_ALL}")
-    input(f"{Fore.WHITE}                                Press [Enter] to start              {Style.RESET_ALL}")
+    banner = [
+        "██████╗ ██╗███╗   ██╗ ██████╗ ███████╗██████╗ ",
+        "██╔══██╗██║████╗  ██║██╔════╝ ██╔════╝██╔══██╗",
+        "██████╔╝██║██╔██╗ ██║██║  ███╗█████╗  ██████╔╝",
+        "██╔═══╝ ██║██║╚██╗██║██║   ██║██╔══╝  ██╔══██╗",
+        "██║     ██║██║ ╚████║╚██████╔╝███████╗██║  ██║",
+        "╚═╝     ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝"
+    ]
+
+    content_h = len(banner) + 6
+    top = calc_vertical_margin(content_h)
+
+    print("\n" * top)
+    for line in banner:
+        print_centered(f"{Fore.WHITE}{line}{Style.RESET_ALL}")
+
+    input_centered(f"{Fore.WHITE}Press [Enter] to start{Style.RESET_ALL}")
 
     while True:
-        host = input(f"{Fore.WHITE}                                Enter host or IP : {Style.RESET_ALL}")
-        if is_valid_ip(host):
+        host = input_centered(f"{Fore.WHITE}Enter host or IP : {Style.RESET_ALL}")
+        if is_valid_ip(host.strip()):
+            host = host.strip()
             break
-        else:
-            print(f"{Fore.RED}                             ❌ Invalid host or IP{Style.RESET_ALL}")
+        print_centered(f"{Fore.RED}❌ Invalid host{Style.RESET_ALL}")
 
     while True:
-        count_input = input(f"{Fore.WHITE}                                Number of pings : [default 10]: {Style.RESET_ALL}")
-        if count_input == "":
-            count = 10
-            break
-        elif count_input.isdigit() and int(count_input) > 0:
-            count = int(count_input)
-            break
-        else:
-            print(f"{Fore.RED}                             ❌ Invalid number of pings!{Style.RESET_ALL}")
+        c = input_centered(f"{Fore.WHITE}Count [8]: {Style.RESET_ALL}")
+        if not c.strip(): count = 8; break
+        if c.strip().isdigit() and int(c)>0: count=int(c); break
+        print_centered(f"{Fore.RED}❌ Invalid number{Style.RESET_ALL}")
 
     while True:
-        interval_input = input(f"{Fore.WHITE}                                Ping interval : [default 500]ms: {Style.RESET_ALL}")
-        if interval_input == "":
-            interval_ms = 500
-            break
-        try:
-            interval_ms = int(interval_input)
-            if interval_ms <= 0:
-                raise ValueError
-            break
-        except ValueError:
-            print(f"{Fore.RED}                             ❌ Invalid interval!{Style.RESET_ALL}")
+        i = input_centered(f"{Fore.WHITE}Interval ms [500]: {Style.RESET_ALL}")
+        if not i.strip(): interval=500; break
+        if i.strip().isdigit() and int(i)>0: interval=int(i); break
+        print_centered(f"{Fore.RED}❌ Invalid number{Style.RESET_ALL}")
 
     while True:
-        timeout_input = input(f"{Fore.WHITE}                                Ping timeout : [default 1000]ms: {Style.RESET_ALL}")
-        if timeout_input == "":
-            timeout_ms = 1000
-            break
-        try:
-            timeout_ms = int(timeout_input)
-            if timeout_ms <= 0:
-                raise ValueError
-            break
-        except ValueError:
-            print(f"{Fore.RED}                             ❌ Invalid timeout value!{Style.RESET_ALL}")
+        t = input_centered(f"{Fore.WHITE}Timeout ms [1000]: {Style.RESET_ALL}")
+        if not t.strip(): timeout=1000; break
+        if t.strip().isdigit() and int(t)>0: timeout=int(t); break
+        print_centered(f"{Fore.RED}❌ Invalid number{Style.RESET_ALL}")
 
-    os.system("clear")
-    await ping_target(host, count, interval_ms / 1000.0, timeout_ms / 1000.0)
+    await ping_target(host, count, interval/1000.0, timeout/1000.0)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print(f"\n{Fore.RED}                             ❌ User interrupted. Exiting{Style.RESET_ALL}")
+        print("\n")
+        print_centered(f"{Fore.RED}❌ Interrupted{Style.RESET_ALL}")
         sys.exit(0)
